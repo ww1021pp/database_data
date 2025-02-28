@@ -22,6 +22,12 @@ Step5: After process Step4, we can get the circular coordinate of TCGA NAT sampl
 we can use DryR to an R package that provides the statistical framework to assess differential rhythmicity of 
 a time series of RNA-Seq data with two and more conditions
 
+Infinally, we just use the model select to compare the rhythmic different between NAT and Cancer Condition.
+
+####Step6 #### plot the gene expression based on Modelselect results##
+Step6.1 based on the facet_wrap 
+
+ 
 
 
 
