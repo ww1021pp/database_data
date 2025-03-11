@@ -1,0 +1,120 @@
+rm(list=ls())
+#setwd("~/project/CirDatabase_020824/Condition_CirGenesCorrelation/Data_res/LostRhyInCase/LostRhy_TF.Enhancer_combined/")
+
+library(openxlsx)
+library(data.table)
+library(dplyr)
+
+
+##### load TF in Liver GIGGLE results#####
+TFfiles="~/project/CirDatabase_020824/Condition_CirGenesCorrelation/Data_res/LostRhyInCase/LostRhy_commonTCGA/LostRhy_Bedfiles_GIGGLE/LostRhyGIGGLE_resforatleat8conditions.xlsx"
+TFsheets <- openxlsx::getSheetNames(TFfiles)
+TFsheetsList <- lapply(TFsheets,openxlsx::read.xlsx,xlsxFile=TFfiles)
+names(TFsheetsList) <- TFsheets
+TFsheetsList=TFsheetsList[-3]
+
+######Load Groseq Overlap LostRhythmic Genes TFs####
+Grofiles = "~/project/CirDatabase_020824/Condition_CirGenesCorrelation/Data_res/LostRhyInCase/LostRhy_commonTCGA/LostRhy_BedfilesMotifs/LostRhy_Overlap_Groseq/LostRhy_HomerMotifs_res/Groseq_KnownMotifs_res_sheets.xlsx"
+Grosheets <- openxlsx::getSheetNames(Grofiles)
+GrosheetsList <- lapply(Grosheets,openxlsx::read.xlsx,xlsxFile=Grofiles)
+names(GrosheetsList) <- Grosheets
+GrosheetsList=GrosheetsList[-length(GrosheetsList)]
+
+#####Drug_target interaction###
+DGinter <- read.delim("~/project/CirDatabase_020824/4DBsets_ChEMBLDGI_Drdugbank_DTC.DTI.txt",header = T) %>% filter(dg_name!="")
+Approved_TFDG <- DGinter %>% filter(grepl("^[Aa]pproved|_approved",dg_group))
+
+gene_symbol= read.delim("LostRhy_name_Symbol.txt",header = T)
+rownames(gene_symbol)=gene_symbol$input_id
+#######TF gene convertion###
+#library(genekitr)
+
+TF_drugList <- lapply(1:length(TFsheetsList), function(x){
+  tmp1 <-  TFsheetsList[[x]]  %>% arrange(desc(GIGGLE_score),desc(odds_ratio)) %>% mutate(Gene=gene_symbol[toupper(Factor),"symbol"])
+  Not_DrugTargtgene = setdiff(toupper(tmp1$Gene),toupper(DGinter$Gene))
+  data <- tmp1 %>% arrange(desc(GIGGLE_score),desc(odds_ratio))%>% 
+    mutate(col= case_when(
+      toupper(Gene) %in% Approved_TFDG$Gene ~"Aprroved", # target for a approved drug
+      toupper(Gene) %in% Not_DrugTargtgene ~ "NoChem", ## not a target for a chemical or drug
+      .default = "Chem" # a target for a drug or Chemical, but not approved 
+    ),
+    Data_source="TFChIPseq",
+    group=names(TFsheetsList)[x]
+    )  %>% select(Gene,col,group,Data_source)
+  return(data)
+}
+)
+names(TF_drugList)=names(TFsheetsList)
+
+
+Groseq_drugList <- lapply(1:length(GrosheetsList), function(x){
+  tmp1 <-  GrosheetsList[[x]]
+  tmp2 <-tmp1  %>% mutate(Gene=gene_symbol[toupper(TF),"symbol"]) %>% filter(Gene !="NA")
+  Not_DrugTargtgene = setdiff(toupper(tmp2$Gene),toupper(DGinter$Gene))
+  data <- tmp2 %>% 
+    mutate(col= case_when(
+      toupper(Gene) %in% Approved_TFDG$Gene ~"Aprroved", # target for a approved drug
+      toupper(Gene) %in% Not_DrugTargtgene ~ "NoChem", ## not a target for a chemical or drug
+      .default = "Chem" # a target for a drug or Chemical, but not approved 
+    ),
+    Data_source="Groseq",
+    group=gsub("Groseq_","",names(GrosheetsList)[x])
+    )  %>% select(Gene,col,group,Data_source)
+  return(data)
+}
+)
+names(Groseq_drugList)=gsub("Groseq_","",names(GrosheetsList))
+
+res_df=do.call(rbind,c(Groseq_drugList,TF_drugList)) %>% unique()
+res_df$col=factor(res_df$col,levels = c("NoChem","Chem","Aprroved"))
+rownames(res_df)=NULL
+
+resList = split(res_df,f = res_df$group)
+
+####TFChIPseq and GroSeq combined plot GIGGLE plot####
+####After get the  TFs from ChIPseq regulated the Lost Rhythmic genes in Case and Groseq combined results, then use TCGA Liver dryR to plot these genes in LIHC.
+#### only consider genes shared in 8 conditions####
+TFsInGT8 <- resList$CommonIngt8Condition %>% reshape2::dcast(.,Gene+col~Data_source,length)
+
+GIGGLE_score <- TFsheetsList$CommonIngt8Condition %>% mutate(Gene=gene_symbol[toupper(Factor),"symbol"]) %>%
+  select(Gene,GIGGLE_score,odds_ratio) %>% full_join(.,y=TFsInGT8)
+
+
+GIGGLEList = lapply(1:length(resList),function(x){
+  TFsinGT = resList[[x]] %>% reshape2::dcast(.,Gene+col~Data_source,length)
+  tmp <- TFsheetsList[[x]] %>%  mutate(Gene=gene_symbol[toupper(Factor),"symbol"]) %>%
+    select(Gene,GIGGLE_score,odds_ratio) %>% full_join(.,y=TFsinGT)
+  return(tmp)
+})
+names(GIGGLEList)=paste0("TFGroseq_",names(TFsheetsList))
+write.xlsx(GIGGLEList,"~/project/CirDatabase_020824/Condition_CirGenesCorrelation/Data_res/LostRhyInCase/LostRhy_commonTCGA/ChIPseqGroSeqCombined_TF.xlsx")
+
+
+figList=list()
+GigPlot_TFtype <- function(x){
+  data = GIGGLEList[[x]] %>% arrange(desc(GIGGLE_score),desc(odds_ratio))%>% 
+    filter(GIGGLE_score >= 80 & col != "NoChem") %>% mutate(dotsize = ifelse(Groseq,1.5,0.8))
+  data$Gene=factor(data$Gene,levels = data$Gene)
+  data$col=factor(data$col,levels = c("NoChem","Chem","Aprroved"))
+  data$dotsize=factor(data$dotsize)
+  p<-ggplot(data) +
+    geom_point(aes(x = Gene, y = GIGGLE_score,color=col,size=dotsize),)+
+    labs(y = "GIGGLE Score (Similarity)",x="")+
+    theme_bw()+ggtitle(paste0("predictTF regulate LostRhyGenes",names(GIGGLEList)[x]))+
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+          axis.text.x = element_text( color = "black", 
+                                      size = 7, angle = 45,hjust = 1),
+          axis.text.y = element_text( color = "black", 
+                                      size = 7),
+          axis.title = element_text(color = "black", 
+                                    size = 7, angle = 45),
+          title = element_text(color = "black", 
+                               size = 7)
+    ) + scale_color_manual(values = c("black","red"))+scale_size_manual(values = c("1.5" = 2, "0.8"=1, 1))
+  return(p)
+}
+
+figList = lapply(1:length(GIGGLEList),GigPlot_TFtype)
+pdf("~/project/CirDatabase_020824/Condition_CirGenesCorrelation/Data_res/LostRhyInCase/LostRhy_commonTCGA/LiverTFGroseq_drug_LostRhythmic.gigglePlot.pdf",width = 5, height = 4)
+sapply(figList,print)
+dev.off()
